@@ -7,20 +7,6 @@ It shows how to keep a history of all previous messages and feed them into the R
 $ApiKey = [System.Environment]::GetEnvironmentVariable("OPENAI_API_KEY")
 $WebToken = [System.Environment]::GetEnvironmentVariable("OPENAI_WEB_TOKEN")
 $ApiEndpoint = "https://api.openai.com/v1/chat/completions"
-# Initialize default model
-$model = "gpt-4o"
-
-# Define Token limit
-#model              Context window	Max output tokens
-#gpt-4.5-preview    128,000 tokens  16,384 tokens
-#gpt-4o-2024-08-06  128,000 tokens  16,384 tokens
-#gpt-4-turbo        128,000 tokens  4,096 tokens
-$tokenLimit = 128000
-
-# Initialize default image settings
-$currentModel = "dall-e-3"
-$currentSize = "1024x1024"
-$currentQuality = "standard"
 
 <#
 System message.
@@ -28,6 +14,29 @@ You can use this to give the AI instructions on what to do, how to act or how to
 Default value for ChatGPT = "You are a helpful assistant."
 #>
 $AiSystemMessage = "You are a helpful assistant"
+
+# Initialize default model
+$model = "gpt-4o"
+$temperature = 0.7 # Lower is more coherent and conservative, higher is more creative and diverse.
+
+# Define optional models, https://platform.openai.com/docs/models
+$models = @{
+    "1" = @{Model = "gpt-4.5-preview-2025-02-27"; tokenLimit = 5000; modelType = "chat"}
+    "2" = @{Model = "gpt-4o"; tokenLimit = 8000; modelType = "chat"}
+    "3" = @{Model = "o3-mini"; tokenLimit = 50000; modelType = "reasoning"}
+    "4" = @{Model = "o1"; tokenLimit = 50000; modelType = "reasoning"}
+}
+# Token Limit: Max amount of tokens the AI will respond with
+#model              Context window	Max output tokens
+#gpt-4.5-preview    128,000 tokens  16,384 tokens
+#gpt-4o-2024-08-06  128,000 tokens  16,384 tokens
+#gpt-o3-min         200,000 tokens  100,000 tokens
+#gpt-o1             200,000 tokens  100,000 tokens 
+
+# Initialize default image settings
+$currentModel = "dall-e-3"
+$currentSize = "1024x1024"
+$currentQuality = "standard"
 
 # we use this list to store the system message and will add any user prompts and ai responses as the conversation evolves.
 [System.Collections.Generic.List[Hashtable]]$MessageHistory = @()
@@ -38,16 +47,11 @@ Function Initialize-MessageHistory ($message){
     $script:MessageHistory.Add(@{"role" = "system"; "content" = $message}) | Out-Null
 }
 
-# Define optional models
-# https://platform.openai.com/docs/models
-$models = @{
-    "1" = "gpt-4-turbo-preview"
-    "2" = "gpt-4o"
-    "3" = "gpt-4.5-preview-2025-02-27"
-}
-
 # Function to send a message to ChatGPT. (We need to pass the entire message history in each request since we're using a RESTful API)
-function Invoke-ChatGPT ($MessageHistory) {
+Function Invoke-ChatGPT ($MessageHistory) {
+    # Get the current model settings
+    $currentModelSetting = $models.GetEnumerator() | Where-Object { $_.Value.Model -eq $model } | Select-Object -First 1
+
     # Set the request headers
     $headers = @{
     "Content-Type" = "application/json"
@@ -55,11 +59,19 @@ function Invoke-ChatGPT ($MessageHistory) {
     }   
 
     # Set the request body
-    $requestBody = @{
-        "model" = $model
-        "messages" = $MessageHistory
-        "max_tokens" = 4000 # Max amount of tokens the AI will respond with
-        "temperature" = $temperature
+    if ($currentModelSetting.Value.modelType -eq "reasoning") {
+        $requestBody = @{
+            "model" = $model
+            "messages" = $MessageHistory
+            "max_completion_tokens" = $currentModelSetting.Value.tokenLimit
+        }
+    } else {
+        $requestBody = @{
+            "model" = $model
+            "messages" = $MessageHistory
+            "max_tokens" = $currentModelSetting.Value.tokenLimit
+            "temperature" = $temperature
+        }
     }
 
     # Send the request
@@ -77,13 +89,13 @@ function Invoke-ChatGPT ($MessageHistory) {
 }
 
 # Display current Image settings
-function Show-CurrentImageSettings {
+Function Show-CurrentImageSettings {
     Write-Host "Current settings：model: 【$currentModel】 size: 【$currentSize】 quality: 【$currentQuality】" -ForegroundColor Cyan
 
 }
 
 # CreatImageSetting
-function CreatImageSetting ($message){
+Function CreatImageSetting ($message){
     $body = @{
         model = "dall-e-3"
         prompt = $message
@@ -100,9 +112,9 @@ function CreatImageSetting ($message){
 }
 
 # CreatImageFunction
-function ProcessImageCreation($versionChoice) {
+Function ProcessImageCreation($versionChoice) {
     do {
-        Write-Host "Please enter a prompt for creating an image (enter 'exit' to leave the image creation function)."
+        Write-Host "Please enter a prompt for creating an image (enter 'exit' to leave the image creation Function)."
         $inputLine = Read-Host
 
         if ($inputLine -eq "exit") {
@@ -137,18 +149,15 @@ function ProcessImageCreation($versionChoice) {
     } while ($true) # Continue repeating until input exit
 }
 
-# Default Setting
-$temperature = 0.7 # Lower is more coherent and conservative, higher is more creative and diverse.
-
 # Save MessageHistory to gpt_history.log in plain text format
-function Save-MessageHistory {
+Function Save-MessageHistory {
     $filePath = Join-Path -Path $PSScriptRoot -ChildPath "gpt_history.log"
     $jsonContent = $MessageHistory | ConvertTo-Json -Depth 5
     Set-Content -Path $filePath -Value $jsonContent -Encoding UTF8
     Write-Host "Conversation history has been saved to $filePath" -ForegroundColor Green
 }
 # Load MessageHistory from gpt_history.log in plain text format
-function Load-MessageHistory {
+Function Load-MessageHistory {
     $filePath = Join-Path -Path $PSScriptRoot -ChildPath "gpt_history.log"
     if (Test-Path $filePath) {
         # Read and parse JSON-formatted content
@@ -173,7 +182,7 @@ function Load-MessageHistory {
 }
 
 # Function to encode image to Base64
-function Encode-ImageToBase64 ($imagePath) {
+Function Encode-ImageToBase64 ($imagePath) {
     if (-Not (Test-Path $imagePath)) {
         Write-Host "No image found at the specified path, please verify if the path is correct." -ForegroundColor Red
         return $null
@@ -183,7 +192,7 @@ function Encode-ImageToBase64 ($imagePath) {
 }
 
 # Function to upload an image
-function Upload-Image {
+Function Upload-Image {
     $imagePath = Read-Host "Enter the path to upload the image"
     $base64Image = Encode-ImageToBase64 $imagePath
 
@@ -209,7 +218,7 @@ function Upload-Image {
 }
 
 # Function to calclate message tokens
-function Calculate-MessageTokens {
+Function Calculate-MessageTokens {
     param (
         [System.Collections.Generic.List[Hashtable]]$MessageHistory
     )
@@ -265,16 +274,17 @@ while ($true) {
             continue
         }
         "setting" {
-            # 選擇模型
+            # Show available models
             Write-Host "Please select a model:"
             $models.GetEnumerator() | ForEach-Object {
-                Write-Host "$($_.Key). $($_.Value)"
+                Write-Host "$($_.Key). $($_.Value.Model)：	Token Limit: $($_.Value.tokenLimit)	Type: $($_.Value.modelType)"
             }
             $modelChoice = Read-Host "`nYour choice"
 
             if ($models.ContainsKey($modelChoice)) {
-                $model = $models[$modelChoice]
-                Write-Host "Switched to model:$model" -ForegroundColor Green
+                $model = $models[$modelChoice].Model
+                $tokenLimit = $models[$modelChoice].tokenLimit
+                Write-Host "已切換至模型：$model (Token Limit: $tokenLimit)" -ForegroundColor Green
             } else {
                 Write-Host "Unknown option, original settings will be maintained." -ForegroundColor Yellow
             }
@@ -421,7 +431,7 @@ while ($true) {
                 Write-Host "Settings completed." -ForegroundColor Cyan
                 continue
             }
-            # Use the image creation function and pass in the chosen mode parameter.
+            # Use the image creation Function and pass in the chosen mode parameter.
             if ($versionChoice -eq "1" -or $versionChoice -eq "2") {
                 ProcessImageCreation $versionChoice
             } else {
