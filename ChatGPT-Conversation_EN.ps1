@@ -1,0 +1,460 @@
+<#
+This script will let you have a conversation with ChatGPT.
+It shows how to keep a history of all previous messages and feed them into the REST API in order to have an ongoing conversation.
+#>
+
+# Define API key and endpoint
+$ApiKey = [System.Environment]::GetEnvironmentVariable("OPENAI_API_KEY")
+$WebToken = [System.Environment]::GetEnvironmentVariable("OPENAI_WEB_TOKEN")
+$ApiEndpoint = "https://api.openai.com/v1/chat/completions"
+# Initialize default model
+$model = "gpt-4o"
+
+# Define Token limit
+#model              Context window	Max output tokens
+#gpt-4.5-preview    128,000 tokens  16,384 tokens
+#gpt-4o-2024-08-06  128,000 tokens  16,384 tokens
+#gpt-4-turbo        128,000 tokens  4,096 tokens
+$tokenLimit = 128000
+
+# Initialize default image settings
+$currentModel = "dall-e-3"
+$currentSize = "1024x1024"
+$currentQuality = "standard"
+
+<#
+System message.
+You can use this to give the AI instructions on what to do, how to act or how to respond to future prompts.
+Default value for ChatGPT = "You are a helpful assistant."
+#>
+$AiSystemMessage = "You are a helpful assistant"
+
+# we use this list to store the system message and will add any user prompts and ai responses as the conversation evolves.
+[System.Collections.Generic.List[Hashtable]]$MessageHistory = @()
+
+# Clears the message history and fills it with the system message (and allows us to reset the history and start a new conversation)
+Function Initialize-MessageHistory ($message){
+    $script:MessageHistory.Clear()
+    $script:MessageHistory.Add(@{"role" = "system"; "content" = $message}) | Out-Null
+}
+
+# Define optional models
+# https://platform.openai.com/docs/models
+$models = @{
+    "1" = "gpt-4-turbo-preview"
+    "2" = "gpt-4o"
+    "3" = "gpt-4.5-preview-2025-02-27"
+}
+
+# Function to send a message to ChatGPT. (We need to pass the entire message history in each request since we're using a RESTful API)
+function Invoke-ChatGPT ($MessageHistory) {
+    # Set the request headers
+    $headers = @{
+    "Content-Type" = "application/json"
+    "Authorization" = "Bearer $ApiKey"
+    }   
+
+    # Set the request body
+    $requestBody = @{
+        "model" = $model
+        "messages" = $MessageHistory
+        "max_tokens" = 4000 # Max amount of tokens the AI will respond with
+        "temperature" = $temperature
+    }
+
+    # Send the request
+    $response = Invoke-RestMethod -Method POST -Uri $ApiEndpoint -Headers $headers -Body (ConvertTo-Json -Depth 5 $requestBody)
+
+    # Extract message content
+    $aiContent = $response.choices[0].message.content
+
+    # If the returned content is not an array, wrap it as an array
+    if ($aiContent -isnot [System.Collections.IEnumerable]) {
+        $aiContent = @(@{"type" = "text"; "text" = $aiContent})
+    }
+
+    return $aiContent
+}
+
+# Display current Image settings
+function Show-CurrentImageSettings {
+    Write-Host "Current settings：model: 【$currentModel】 size: 【$currentSize】 quality: 【$currentQuality】" -ForegroundColor Cyan
+
+}
+
+# CreatImageSetting
+function CreatImageSetting ($message){
+    $body = @{
+        model = "dall-e-3"
+        prompt = $message
+        n = 1
+        size = "1024x1024"
+    } | ConvertTo-Json
+
+    $response = curl https://api.openai.com/v1/images/generations `
+        -H "Content-Type: application/json" `
+        -H "Authorization: Bearer $ApiKey" `
+        -d $body
+
+    return $response
+}
+
+# CreatImageFunction
+function ProcessImageCreation($versionChoice) {
+    do {
+        Write-Host "Please enter a prompt for creating an image (enter 'exit' to leave the image creation function)."
+        $inputLine = Read-Host
+
+        if ($inputLine -eq "exit") {
+            break
+        }
+
+        # Decide whether to optimize the prompt based on the version choice.
+        if ($versionChoice -eq "1") {
+            # Send the prompt to ChatGPT for optimization.
+            $MessageHistory.Add(@{"role"="user"; "content"="Optimize the following prompt words into a more explicit expression, strong style, and delicate and rich details, with the meticulousness of a master's work. The reply content should be delivered directly to Dell-e-3. Just reply to the prompt: $inputLine"})
+            $optimizedPrompt = Invoke-ChatGPT $MessageHistory
+
+            Write-Host "`nOptimized prompt: $optimizedPrompt"
+            $aiResponse = CreatImageSetting $optimizedPrompt
+        } else {
+            $aiResponse = CreatImageSetting $inputLine
+        }
+
+        # Parse the JSON response.
+        $responseJson = $aiResponse | ConvertFrom-Json
+        # Extract the URL and display it.
+        if ($responseJson.error) {
+            Write-Host "Error code: $($responseJson.error.code)"
+            Write-Host "Error message: $($responseJson.error.message)"
+        } else {
+            foreach ($item in $responseJson.data) {
+                $imageUrl = $item.url
+                Write-Host "`nGenerated image URL: $imageUrl"
+                Start-Process $imageUrl  # Automatically open the browser.
+            }
+        }
+    } while ($true) # Continue repeating until input exit
+}
+
+# Default Setting
+$temperature = 0.7 # Lower is more coherent and conservative, higher is more creative and diverse.
+
+# Save MessageHistory to gpt_history.log in plain text format
+function Save-MessageHistory {
+    $filePath = Join-Path -Path $PSScriptRoot -ChildPath "gpt_history.log"
+    $jsonContent = $MessageHistory | ConvertTo-Json -Depth 5
+    Set-Content -Path $filePath -Value $jsonContent -Encoding UTF8
+    Write-Host "Conversation history has been saved to $filePath" -ForegroundColor Green
+}
+# Load MessageHistory from gpt_history.log in plain text format
+function Load-MessageHistory {
+    $filePath = Join-Path -Path $PSScriptRoot -ChildPath "gpt_history.log"
+    if (Test-Path $filePath) {
+        # Read and parse JSON-formatted content
+        $jsonContent = Get-Content -Path $filePath -Raw
+        $jsonArray = $jsonContent | ConvertFrom-Json
+
+        # Convert to List[Hashtable]
+        $script:MessageHistory = [System.Collections.Generic.List[Hashtable]]::new()
+        foreach ($item in $jsonArray) {
+            # Convert PSCustomObject to Hashtable
+            $hashtableItem = @{}
+            foreach ($key in $item.PSObject.Properties.Name) {
+                $hashtableItem[$key] = $item.$key
+            }
+            $script:MessageHistory.Add($hashtableItem)
+        }
+
+        Write-Host "Conversation history has been loaded from gpt_history.log" -ForegroundColor Green
+    } else {
+        Write-Host "gpt_history.log file not found" -ForegroundColor Red
+    }
+}
+
+# Function to encode image to Base64
+function Encode-ImageToBase64 ($imagePath) {
+    if (-Not (Test-Path $imagePath)) {
+        Write-Host "No image found at the specified path, please verify if the path is correct." -ForegroundColor Red
+        return $null
+    }
+    [Byte[]]$imageBytes = [System.IO.File]::ReadAllBytes($imagePath)
+    return [Convert]::ToBase64String($imageBytes)
+}
+
+# Function to upload an image
+function Upload-Image {
+    $imagePath = Read-Host "Enter the path to upload the image"
+    $base64Image = Encode-ImageToBase64 $imagePath
+
+    if ($base64Image) {
+        Write-Host "Image uploading..."
+        $messageContent = @{
+            role = "user"
+            content = @(
+                @{
+                    type = "image_url"
+                    image_url = @{ url = "data:image/jpeg;base64,$base64Image" }
+                }
+            )
+        }
+
+        $MessageHistory.Add($messageContent)
+
+        # Send the request to OpenAI
+        $response = Invoke-ChatGPT $MessageHistory
+        Write-Host "AI:" -ForegroundColor Yellow
+        Write-Host $response
+    }
+}
+
+# Function to calclate message tokens
+function Calculate-MessageTokens {
+    param (
+        [System.Collections.Generic.List[Hashtable]]$MessageHistory
+    )
+
+    # Convert conversation history to a JSON string
+    $jsonContent = $MessageHistory | ConvertTo-Json -Depth 5 -Compress
+
+    # Create a temporary file to store the JSON string
+    $tempFilePath = [System.IO.Path]::GetTempFileName()
+    Set-Content -Path $tempFilePath -Value $jsonContent -Encoding UTF8
+
+    $pythonScriptPath = Join-Path -Path $PSScriptRoot -ChildPath "ChatGPT-tiktoken.py"
+
+    # Call the Python script and pass the path of the temporary file as an argument
+    $tokenCount = & python $pythonScriptPath $tempFilePath 2>&1 | Out-String
+    # Remove extra whitespace characters
+    $tokenCount = $tokenCount.Trim()
+
+    # Delete temporary files
+    Remove-Item -Path $tempFilePath
+
+    return $tokenCount
+}
+# Show startup text
+Clear-Host
+Write-Host "###############################`n# ChatGPT ($model) Powershell #`n###############################`n`nEnter your prompt to continue." -ForegroundColor Yellow
+Write-Host "`nType 'eof' to switch to paragraph input mode,`nType 'read' to Read a plain text file,`nType 'image' to use DALL-E to creat an image,`nType 'upload' to upload an image for Vision,`nType 'save' to save the chat history or 'load' to load the chat history.`nType 'usage' to check incurred fees.`nType 'setting' to set model and temperature.`nType 'exit' to quit or 'reset' to start a new chat." -ForegroundColor Yellow
+
+# Add system message to MessageHistory
+Initialize-MessageHistory $AiSystemMessage
+
+# Main loop
+while ($true) {
+    # Capture user input
+    $userMessage = Read-Host "`nYou"
+    if ($userMessage -eq "eof") {
+        $userMessage = ""
+        Write-Host "Please enter your text, and when you are finished, type 'EOF' on a new line to end:"
+        do {
+            $inputLine = Read-Host
+            if ($inputLine -ne "EOF") {
+                $userMessage += $inputLine + "`n"
+            }
+        } while ($inputLine -ne "EOF")
+    }
+    if ($userMessage -eq "exit") {
+        break
+    }
+    switch ($userMessage) {
+        "reset" {
+            Initialize-MessageHistory $AiSystemMessage
+            Write-Host "Messages reset." -ForegroundColor Yellow
+            continue
+        }
+        "setting" {
+            # 選擇模型
+            Write-Host "Please select a model:"
+            $models.GetEnumerator() | ForEach-Object {
+                Write-Host "$($_.Key). $($_.Value)"
+            }
+            $modelChoice = Read-Host "`nYour choice"
+
+            if ($models.ContainsKey($modelChoice)) {
+                $model = $models[$modelChoice]
+                Write-Host "Switched to model:$model" -ForegroundColor Green
+            } else {
+                Write-Host "Unknown option, original settings will be maintained." -ForegroundColor Yellow
+            }
+
+            # Switched to model
+            Write-Host "Please select a mode:`n1. Steady`n2. Default`n3. Creative"
+            $temperatureChoice = Read-Host "`n你的選擇"
+
+            # Pattern Configuration Dictionary
+            $temperatureSettings = @{
+                "1" = @{Temperature = 0.2; Message = "Set to Steady mode."}
+                "2" = @{Temperature = 0.7; Message = "Set to Default mode."}
+                "3" = @{Temperature = 1.0; Message = "Set to Creative mode."}
+            }
+
+            if ($temperatureSettings.ContainsKey($temperatureChoice)) {
+                $temperature = $temperatureSettings[$temperatureChoice].Temperature
+                Write-Host $temperatureSettings[$temperatureChoice].Message -ForegroundColor Green
+            } else {
+                Write-Host "Unknown option, will maintain original settings." -ForegroundColor Yellow
+            }
+
+            Write-Host "Settings completed, returning to the main menu." -ForegroundColor Cyan
+            continue
+        }
+        "save" {
+            Save-MessageHistory
+            continue
+        }
+        "load" {
+            Load-MessageHistory
+            continue
+        }
+        "read" {
+            $userMessage = ""
+            Write-Host "Please drag the text file you want to read into the window:" -ForegroundColor Cyan
+            $filePath = Read-Host
+            Try {
+                $userMessage = "The content of the file read is：" + (Get-Content -Path $filePath -ErrorAction Stop)
+                Write-Host "`nFile read successfully" -ForegroundColor Green
+            }
+            Catch {
+                Write-Host "`nFile read error" -ForegroundColor Red
+                continue
+            }
+        }
+        "usage" {
+            $fakeUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:135.0) Gecko/20100101 Firefox/135.0"
+            $jsonData = curl -sX GET https://api.openai.com/dashboard/billing/credit_grants `
+                        -H "Content-Type: application/json" `
+                        -H "User-Agent: $fakeUserAgent" `
+                        -H "Authorization: $WebToken"
+        
+            $response = $jsonData | ConvertFrom-Json
+        
+            if ($response.error) {
+                # Check for error messages, and if it is an API Key error
+                if ($response.error.code -eq "invalid_api_key") {
+                    Write-Host "Error:$($response.error.message)" -ForegroundColor Red
+                    Write-Host "Reminder: Use a browser to go to https://platform.openai.com/usage and copy the request header 'Authorization' used in GET 'credit_grants'" -ForegroundColor Yellow
+                    # Waiting for the user to enter a new Token
+                    $newToken = Read-Host -Prompt "Please enter the new Web Token (including Bearer)"
+                    # Save to environment variables
+                    setx OPENAI_WEB_TOKEN "$newToken"
+                    $WebToken = "$newToken"
+                    Write-Host "The new Web Token has been saved to the environment variable 'OPENAI_WEB_TOKEN''。" -ForegroundColor Green
+                } else {
+                    # Handle other possible errors
+                    Write-Host "An error occurred:" -ForegroundColor Red
+                    Write-Host "Error type:$($response.error.type)"regroundColor Yellow
+                    Write-Host "Error message:$($response.error.message) -Fo" -ForegroundColor Yellow
+                }
+            } else {
+                $date = Get-Date -Format "yyyy-MM-dd HH:mm"
+                Write-Host "$date`nRemaining balance  ：$($response.total_available)`nTotal usage cost:$($response.total_used)" -ForegroundColor Yellow
+            }
+            continue
+        }
+        "upload" {
+            Upload-Image
+            continue
+        }
+        "image" {
+            Show-CurrentImageSettings
+            Write-Host "`nPlease select an option:`n1. Optimize prompts and generate image`n2. Generate image with original prompts`n3. Settings"
+            $versionChoice = Read-Host "`nYour choice"
+            if ($versionChoice -eq "3") {
+                # Enter settings mode
+                Write-Host "Enter settings mode:"
+        
+                # Change model
+                Write-Host "Please select a model:`n1. DALL·E 2`n2. DALL·E 3"
+                $modelChoice = Read-Host "`nYour choice"
+                switch ($modelChoice) {
+                    "1" {
+                        $currentModel = "dall-e-2"
+                        Write-Host "Switched to model:dall-e-2" -ForegroundColor Green
+                    }
+                    "2" {
+                        $currentModel = "dall-e-3"
+                        Write-Host "Switched to model:dall-e-3" -ForegroundColor Green
+                    }
+                    default {
+                        Write-Host "Unknown option, model remains unchanged." -ForegroundColor Yellow
+                    }
+                }
+        
+                # Change size
+                Write-Host "Please select a size:`n1. 256x256 (DALL·E 2 Only)`n2. 512x512 (DALL·E 2 Only)`n3. 1024x1024`n4. 1024x1792 (Only DALL·E 3)`n5. 1792x1024 (DALL·E 3 Only)"
+                $sizeChoice = Read-Host "`nYour choice"
+                $sizeOptions = @{
+                    "1" = "256x256"
+                    "2" = "512x512"
+                    "3" = "1024x1024"
+                    "4" = "1024x1792"
+                    "5" = "1792x1024"
+                }
+                # 判斷選擇
+                if ($sizeOptions.ContainsKey($sizeChoice)) {
+                    $currentSize = $sizeOptions[$sizeChoice]
+                    Write-Host "Size set to:$currentSize" -ForegroundColor Green
+                } else {
+                    Write-Host "Unknown option, size remains unchanged." -ForegroundColor Yellow
+                }
+        
+                # Change quality
+                Write-Host "Please select a quality:`n1. standard`n2. hd (DALL·E 3 only)"
+                $qualityChoice = Read-Host "`nYour choice"
+                switch ($qualityChoice) {
+                    "1" {
+                        $currentQuality = "standard"
+                        Write-Host "Quality set to:standard" -ForegroundColor Green
+                    }
+                    "2" {
+                        $currentQuality = "hd"
+                        Write-Host "Quality set to:hd" -ForegroundColor Green
+                    }
+                    default {
+                        Write-Host "Unknown option, quality remains unchanged." -ForegroundColor Yellow
+                    }
+                }
+        
+                # Return to main image interface
+                Write-Host "Settings completed." -ForegroundColor Cyan
+                continue
+            }
+            # Use the image creation function and pass in the chosen mode parameter.
+            if ($versionChoice -eq "1" -or $versionChoice -eq "2") {
+                ProcessImageCreation $versionChoice
+            } else {
+                Write-Host "Unknown choice, please re-enter." -ForegroundColor Yellow
+            }
+            continue
+        }
+        default {
+            # Add new user prompt to list of messages
+            $MessageHistory.Add(@{
+                "role" = "user"
+                "content" = @(@{"type" = "text"; "text" = $userMessage})
+            })
+
+            # Query ChatGPT
+            $tokenCount = [int](Calculate-MessageTokens -MessageHistory $MessageHistory)
+            Write-Host "...Processing ( $model Already used token : $tokenCount)...`n" -ForegroundColor DarkGray
+            # Check if the token limit is approaching.
+            if ($tokenCount -ge 120000) {
+                $remainingTokens = $tokenLimit - $tokenCount
+                Write-Host "Warning: There are $remainingTokens tokens left until the token limit of $tokenLimit is reached." -ForegroundColor Red
+            }
+
+            $aiResponse = Invoke-ChatGPT $MessageHistory
+
+            # Show response
+            Write-Host "AI: $aiResponse" -ForegroundColor Yellow
+
+            # Add ChatGPT response to list of messages
+            $MessageHistory.Add(@{
+                "role" = "assistant"
+                "content" = @(@{"type" = "text"; "text" = $aiResponse})
+            })
+        }
+    }
+}
