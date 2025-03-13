@@ -125,6 +125,7 @@ Function ProcessImageCreation($versionChoice) {
         if ($versionChoice -eq "1") {
             # Send the prompt to ChatGPT for optimization.
             $MessageHistory.Add(@{"role"="user"; "content"="Optimize the following prompt words into a more explicit expression, strong style, and delicate and rich details, with the meticulousness of a master's work. The reply content should be delivered directly to Dell-e-3. Just reply to the prompt: $inputLine"})
+            Write-Host "`nOptimizing..."
             $optimizedPrompt = Invoke-ChatGPT $MessageHistory
 
             Write-Host "`nOptimized prompt: $optimizedPrompt"
@@ -142,7 +143,7 @@ Function ProcessImageCreation($versionChoice) {
         } else {
             foreach ($item in $responseJson.data) {
                 $imageUrl = $item.url
-                Write-Host "`nGenerated image URL: $imageUrl"
+                Write-Host "`nGenerated image URL: $imageUrl`n"
                 Start-Process $imageUrl  # Automatically open the browser.
             }
         }

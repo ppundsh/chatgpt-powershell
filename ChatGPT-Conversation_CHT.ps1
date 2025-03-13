@@ -125,6 +125,7 @@ Function ProcessImageCreation($versionChoice) {
         if ($versionChoice -eq "1") {
             # 發送提示詞給 ChatGPT 進行最佳化
             $MessageHistory.Add(@{"role"="user"; "content"="將以下提示詞最佳化為更明確的表達的內容、強烈的風格和精緻且豐富 的細節的 prompt，具有大師級作品的細緻，回覆內容要直接交付給 Dell-e-3，只需要回覆 prompt 即可：$inputLine"})
+            Write-Host "`n最佳化中..."
             $optimizedPrompt = Invoke-ChatGPT $MessageHistory
 
             Write-Host "`n最佳化後的提示詞: $optimizedPrompt"
@@ -142,7 +143,7 @@ Function ProcessImageCreation($versionChoice) {
         } else {
             foreach ($item in $responseJson.data) {
                 $imageUrl = $item.url
-                Write-Host "`n生成的圖片 URL: $imageUrl"
+                Write-Host "`n生成的圖片 URL: $imageUrl`n"
                 Start-Process $imageUrl  # 自動開啟瀏覽器
             }
         }
