@@ -276,14 +276,14 @@ while ($true) {
             # 顯示可選模型
             Write-Host "請選擇一個模型："
             $models.GetEnumerator() | ForEach-Object {
-                Write-Host "$($_.Key). $($_.Value.Model)：	Token Limit: $($_.Value.tokenLimit)	Type: $($_.Value.modelType)"
+                Write-Host "$($_.Key). $($_.Value.Model)：	Respond Token Limit: $($_.Value.tokenLimit)	Type: $($_.Value.modelType)"
             }
             $modelChoice = Read-Host "`n你的選擇"
 
             if ($models.ContainsKey($modelChoice)) {
                 $model = $models[$modelChoice].Model
                 $tokenLimit = $models[$modelChoice].tokenLimit
-                Write-Host "已切換至模型：$model (Token Limit: $tokenLimit)" -ForegroundColor Green
+                Write-Host "已切換至模型：$model (Respond Token Limit: $tokenLimit)" -ForegroundColor Green
             } else {
                 Write-Host "未知的選項，將維持原設定。" -ForegroundColor Yellow
             }

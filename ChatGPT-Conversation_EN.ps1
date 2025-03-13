@@ -90,7 +90,7 @@ Function Invoke-ChatGPT ($MessageHistory) {
 
 # Display current Image settings
 Function Show-CurrentImageSettings {
-    Write-Host "Current settings：model: 【$currentModel】 size: 【$currentSize】 quality: 【$currentQuality】" -ForegroundColor Cyan
+    Write-Host "Current settings:model: 【$currentModel】 size: 【$currentSize】 quality: 【$currentQuality】" -ForegroundColor Cyan
 
 }
 
@@ -277,21 +277,21 @@ while ($true) {
             # Show available models
             Write-Host "Please select a model:"
             $models.GetEnumerator() | ForEach-Object {
-                Write-Host "$($_.Key). $($_.Value.Model)：	Token Limit: $($_.Value.tokenLimit)	Type: $($_.Value.modelType)"
+                Write-Host "$($_.Key). $($_.Value.Model):	Respond Token Limit: $($_.Value.tokenLimit)	Type: $($_.Value.modelType)"
             }
             $modelChoice = Read-Host "`nYour choice"
 
             if ($models.ContainsKey($modelChoice)) {
                 $model = $models[$modelChoice].Model
                 $tokenLimit = $models[$modelChoice].tokenLimit
-                Write-Host "已切換至模型：$model (Token Limit: $tokenLimit)" -ForegroundColor Green
+                Write-Host "Switched to Model:$model (Respond Token Limit: $tokenLimit)" -ForegroundColor Green
             } else {
                 Write-Host "Unknown option, original settings will be maintained." -ForegroundColor Yellow
             }
 
             # Switched to model
             Write-Host "Please select a mode:`n1. Steady`n2. Default`n3. Creative"
-            $temperatureChoice = Read-Host "`n你的選擇"
+            $temperatureChoice = Read-Host "`nYour Choice"
 
             # Pattern Configuration Dictionary
             $temperatureSettings = @{
@@ -323,7 +323,7 @@ while ($true) {
             Write-Host "Please drag the text file you want to read into the window:" -ForegroundColor Cyan
             $filePath = Read-Host
             Try {
-                $userMessage = "The content of the file read is：" + (Get-Content -Path $filePath -ErrorAction Stop)
+                $userMessage = "The content of the file read is:" + (Get-Content -Path $filePath -ErrorAction Stop)
                 Write-Host "`nFile read successfully" -ForegroundColor Green
             }
             Catch {
@@ -359,7 +359,7 @@ while ($true) {
                 }
             } else {
                 $date = Get-Date -Format "yyyy-MM-dd HH:mm"
-                Write-Host "$date`nRemaining balance  ：$($response.total_available)`nTotal usage cost:$($response.total_used)" -ForegroundColor Yellow
+                Write-Host "$date`nRemaining balance  :$($response.total_available)`nTotal usage cost:$($response.total_used)" -ForegroundColor Yellow
             }
             continue
         }
