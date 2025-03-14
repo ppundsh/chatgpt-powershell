@@ -20,13 +20,14 @@ $model = "gpt-4o"
 $temperature = 0.7 # Lower is more coherent and conservative, higher is more creative and diverse.
 
 # Define optional models, https://platform.openai.com/docs/models
+# respondTokenLimit: Max amount of tokens the AI will respond with
 $models = @{
-    "1" = @{Model = "gpt-4.5-preview-2025-02-27"; tokenLimit = 5000; modelType = "chat"}
-    "2" = @{Model = "gpt-4o"; tokenLimit = 8000; modelType = "chat"}
-    "3" = @{Model = "o3-mini"; tokenLimit = 50000; modelType = "reasoning"}
-    "4" = @{Model = "o1"; tokenLimit = 50000; modelType = "reasoning"}
+    "1" = @{Model = "gpt-4o"; respondTokenLimit = 8000; contextTokenLimit = 128000; modelType = "chat"}
+    "2" = @{Model = "gpt-4.5-preview-2025-02-27"; respondTokenLimit = 5000; contextTokenLimit = 128000 ;modelType = "chat"}
+    "3" = @{Model = "o3-mini"; respondTokenLimit = 50000; contextTokenLimit = 200000; modelType = "reasoning"}
+    "4" = @{Model = "o1"; respondTokenLimit = 50000; contextTokenLimit = 200000; modelType = "reasoning"}
+    "5" = @{Model = "gpt-4o-search-preview"; respondTokenLimit = 5000; contextTokenLimit = 128000; modelType = "reasoning"}
 }
-# Token Limit: Max amount of tokens the AI will respond with
 #model              Context window	Max output tokens
 #gpt-4.5-preview    128,000 tokens  16,384 tokens
 #gpt-4o-2024-08-06  128,000 tokens  16,384 tokens
@@ -451,9 +452,10 @@ while ($true) {
             $tokenCount = [int](Calculate-MessageTokens -MessageHistory $MessageHistory)
             Write-Host "...Processing ( $model Already used token : $tokenCount)...`n" -ForegroundColor DarkGray
             # Check if the token limit is approaching.
-            if ($tokenCount -ge 120000) {
-                $remainingTokens = $tokenLimit - $tokenCount
-                Write-Host "Warning: There are $remainingTokens tokens left until the token limit of $tokenLimit is reached." -ForegroundColor Red
+            $currentModelSetting = $models.GetEnumerator() | Where-Object { $_.Value.Model -eq $model } | Select-Object -First 1
+            if ($tokenCount -ge ($currentModelSetting.Value.contextTokenLimit - 2000)) {
+                $remainingTokens = $currentModelSetting.Value.contextTokenLimit - $tokenCount
+                Write-Host "Warning: There are $contextTokenLimit tokens left until the token limit of $remainingTokens is reached." -ForegroundColor Red
             }
 
             $aiResponse = Invoke-ChatGPT $MessageHistory
