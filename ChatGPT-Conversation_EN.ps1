@@ -21,7 +21,7 @@ $temperature = 0.7 # Lower is more coherent and conservative, higher is more cre
 
 # Define optional models, https://platform.openai.com/docs/models
 # respondTokenLimit: Max amount of tokens the AI will respond with
-$models = @{
+$models = [ordered]@{
     "1" = @{Model = "gpt-4o"; respondTokenLimit = 8000; contextTokenLimit = 128000; modelType = "chat"}
     "2" = @{Model = "gpt-4.5-preview-2025-02-27"; respondTokenLimit = 5000; contextTokenLimit = 128000 ;modelType = "chat"}
     "3" = @{Model = "o3-mini"; respondTokenLimit = 50000; contextTokenLimit = 200000; modelType = "reasoning"}
@@ -95,25 +95,8 @@ Function Show-CurrentImageSettings {
 
 }
 
-# CreatImageSetting
-Function CreatImageSetting ($message){
-    $body = @{
-        model = "dall-e-3"
-        prompt = $message
-        n = 1
-        size = "1024x1024"
-    } | ConvertTo-Json
-
-    $response = curl https://api.openai.com/v1/images/generations `
-        -H "Content-Type: application/json" `
-        -H "Authorization: Bearer $ApiKey" `
-        -d $body
-
-    return $response
-}
-
-# CreatImageFunction
-Function ProcessImageCreation($versionChoice) {
+# Process-ImageCreation
+Function Process-ImageCreation($versionChoice) {
     do {
         Write-Host "Please enter a prompt for creating an image (enter 'exit' to leave the image creation Function)."
         $inputLine = Read-Host
@@ -130,9 +113,9 @@ Function ProcessImageCreation($versionChoice) {
             $optimizedPrompt = Invoke-ChatGPT $MessageHistory
 
             Write-Host "`nOptimized prompt: $optimizedPrompt"
-            $aiResponse = CreatImageSetting $optimizedPrompt
+            $aiResponse = Invoke-Dalle $optimizedPrompt
         } else {
-            $aiResponse = CreatImageSetting $inputLine
+            $aiResponse = Invoke-Dalle $inputLine
         }
 
         # Parse the JSON response.
@@ -151,19 +134,53 @@ Function ProcessImageCreation($versionChoice) {
     } while ($true) # Continue repeating until input exit
 }
 
+# Invoke-Dalle
+Function Invoke-Dalle ($message){
+    $body = @{
+        model = "dall-e-3"
+        prompt = $message
+        n = 1
+        size = "1024x1024"
+    } | ConvertTo-Json
+    try {
+        $response = curl https://api.openai.com/v1/images/generations `
+            -H "Content-Type: application/json" `
+            -H "Authorization: Bearer $ApiKey" `
+            -d $body
+        return $response
+    }
+    catch {
+        Write-Host "⚠️ 圖片生成 API 呼叫失敗：" -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor Red
+    }
+}
+
 # Save MessageHistory to gpt_history.log in plain text format
 Function Save-MessageHistory {
     $filePath = Join-Path -Path $PSScriptRoot -ChildPath "gpt_history.log"
-    $jsonContent = $MessageHistory | ConvertTo-Json -Depth 5
+    try {
+        $jsonContent = $MessageHistory | ConvertTo-Json -Depth 5
+    }
+    catch {
+        Write-Host "⚠️ An error occurred while saving the conversation history file:" -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor Red
+    }
     Set-Content -Path $filePath -Value $jsonContent -Encoding UTF8
     Write-Host "Conversation history has been saved to $filePath" -ForegroundColor Green
 }
+
 # Load MessageHistory from gpt_history.log in plain text format
 Function Load-MessageHistory {
     $filePath = Join-Path -Path $PSScriptRoot -ChildPath "gpt_history.log"
     if (Test-Path $filePath) {
         # Read and parse JSON-formatted content
-        $jsonContent = Get-Content -Path $filePath -Raw
+        try {
+            $jsonContent = Get-Content -Path $filePath -Raw
+        }
+        catch {
+            Write-Host "⚠️ An error occurred while reading the conversation history file:" -ForegroundColor Red
+            Write-Host $_.Exception.Message -ForegroundColor Red
+        }
         $jsonArray = $jsonContent | ConvertFrom-Json
 
         # Convert to List[Hashtable]
@@ -189,8 +206,15 @@ Function Encode-ImageToBase64 ($imagePath) {
         Write-Host "No image found at the specified path, please verify if the path is correct." -ForegroundColor Red
         return $null
     }
-    [Byte[]]$imageBytes = [System.IO.File]::ReadAllBytes($imagePath)
-    return [Convert]::ToBase64String($imageBytes)
+    try {
+        [Byte[]]$imageBytes = [System.IO.File]::ReadAllBytes($imagePath)
+        return [Convert]::ToBase64String($imageBytes)
+    }
+    catch {
+        Write-Host "⚠️ Image reading failed, please confirm whether the path or file is correct:" -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor Red
+        return $null
+    }
 }
 
 # Function to upload an image
@@ -235,19 +259,37 @@ Function Calculate-MessageTokens {
     $pythonScriptPath = Join-Path -Path $PSScriptRoot -ChildPath "ChatGPT-tiktoken.py"
 
     # Call the Python script and pass the path of the temporary file as an argument
-    $tokenCount = & python $pythonScriptPath $tempFilePath 2>&1 | Out-String
-    # Remove extra whitespace characters
-    $tokenCount = $tokenCount.Trim()
+    try {
+        $tokenCount = & python $pythonScriptPath $tempFilePath 2>&1 | Out-String
+        $tokenCount = $tokenCount.Trim()
+    }
+    catch {
+        Write-Host "⚠️ Token calculation (Python script) call failed:" -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor Red
+        $tokenCount = 0
+    }
 
-    # Delete temporary files
+    # Clear temporary files
     Remove-Item -Path $tempFilePath
 
     return $tokenCount
 }
+
+# Error Handling Function
+Function Handle-Error ($errorMessage) {
+    Write-Host "⚠️ An error occurred $errorMessage" -ForegroundColor Red
+}
+
 # Show startup text
 Clear-Host
 Write-Host "###############################`n# ChatGPT ($model) Powershell #`n###############################`n`nEnter your prompt to continue." -ForegroundColor Yellow
 Write-Host "`nType 'eof' to switch to paragraph input mode,`nType 'read' to Read a plain text file,`nType 'image' to use DALL-E to creat an image,`nType 'upload' to upload an image for Vision,`nType 'save' to save the chat history or 'load' to load the chat history.`nType 'usage' to check incurred fees.`nType 'setting' to set model and temperature.`nType 'exit' to quit or 'reset' to start a new chat." -ForegroundColor Yellow
+
+# Check apikey
+if (-not $ApiKey) {
+    Write-Host "No API Key is set. Please set the OPENAI_API_KEY environment variable." -ForegroundColor Red
+    exit
+}
 
 # Add system message to MessageHistory
 Initialize-MessageHistory $AiSystemMessage
@@ -283,7 +325,7 @@ while ($true) {
             }
             $modelChoice = Read-Host "`nYour choice"
 
-            if ($models.ContainsKey($modelChoice)) {
+            if ($models.Keys -contains $modelChoice) {
                 $model = $models[$modelChoice].Model
                 $tokenLimit = $models[$modelChoice].tokenLimit
                 Write-Host "Switched to Model:$model (Respond Token Limit: $tokenLimit)" -ForegroundColor Green
@@ -296,13 +338,13 @@ while ($true) {
             $temperatureChoice = Read-Host "`nYour Choice"
 
             # Pattern Configuration Dictionary
-            $temperatureSettings = @{
+            $temperatureSettings = [ordered]@{
                 "1" = @{Temperature = 0.2; Message = "Set to Steady mode."}
                 "2" = @{Temperature = 0.7; Message = "Set to Default mode."}
                 "3" = @{Temperature = 1.0; Message = "Set to Creative mode."}
             }
 
-            if ($temperatureSettings.ContainsKey($temperatureChoice)) {
+            if ($temperatureSettings.Keys -contains ($temperatureChoice)) {
                 $temperature = $temperatureSettings[$temperatureChoice].Temperature
                 Write-Host $temperatureSettings[$temperatureChoice].Message -ForegroundColor Green
             } else {
@@ -397,7 +439,7 @@ while ($true) {
                 # Change size
                 Write-Host "Please select a size:`n1. 256x256 (DALL·E 2 Only)`n2. 512x512 (DALL·E 2 Only)`n3. 1024x1024`n4. 1024x1792 (Only DALL·E 3)`n5. 1792x1024 (DALL·E 3 Only)"
                 $sizeChoice = Read-Host "`nYour choice"
-                $sizeOptions = @{
+                $sizeOptions = [ordered]@{
                     "1" = "256x256"
                     "2" = "512x512"
                     "3" = "1024x1024"
@@ -405,7 +447,7 @@ while ($true) {
                     "5" = "1792x1024"
                 }
                 # 判斷選擇
-                if ($sizeOptions.ContainsKey($sizeChoice)) {
+                if ($sizeOptions.Keys -contains ($sizeChoice)) {
                     $currentSize = $sizeOptions[$sizeChoice]
                     Write-Host "Size set to:$currentSize" -ForegroundColor Green
                 } else {
@@ -435,7 +477,7 @@ while ($true) {
             }
             # Use the image creation Function and pass in the chosen mode parameter.
             if ($versionChoice -eq "1" -or $versionChoice -eq "2") {
-                ProcessImageCreation $versionChoice
+                Process-ImageCreation $versionChoice
             } else {
                 Write-Host "Unknown choice, please re-enter." -ForegroundColor Yellow
             }
@@ -449,25 +491,84 @@ while ($true) {
             })
 
             # Query ChatGPT
-            $tokenCount = [int](Calculate-MessageTokens -MessageHistory $MessageHistory)
-            Write-Host "...Processing ( $model Already used token : $tokenCount)...`n" -ForegroundColor DarkGray
+            try {
+                $tokenCount = [int](Calculate-MessageTokens -MessageHistory $MessageHistory)
+            }
+            catch {
+                Write-Host "⚠️ An error occurred while calculating Token:：" -ForegroundColor Red
+                Write-Host $_.Exception.Message -ForegroundColor Red
+                $tokenCount = 0  # Give a preset value to avoid subsequent errors
+            }
+            
+            Write-Host "...Processing ( $model sent this time using [$tokenCount tokens])...`n" -ForegroundColor DarkGray
             # Check if the token limit is approaching.
             $currentModelSetting = $models.GetEnumerator() | Where-Object { $_.Value.Model -eq $model } | Select-Object -First 1
-            if ($tokenCount -ge ($currentModelSetting.Value.contextTokenLimit - 2000)) {
+            if ($tokenCount -ge ($currentModelSetting.Value.contextTokenLimit  * 0.9)) {
                 $remainingTokens = $currentModelSetting.Value.contextTokenLimit - $tokenCount
                 Write-Host "Warning: There are $contextTokenLimit tokens left until the token limit of $remainingTokens is reached." -ForegroundColor Red
             }
 
-            $aiResponse = Invoke-ChatGPT $MessageHistory
+            try {
+                $aiResponse = Invoke-ChatGPT $MessageHistory
+            }
+            catch {
+                Write-Host "⚠️ An error occurred while calling ChatGPT:" -ForegroundColor Red
+                Write-Host $_.Exception.Message -ForegroundColor Red
+                continue
+            }
+            
+            # Here we do clear format judgment processing
+            if ($aiResponse -is [string]) {
+                # If it is a string directly, use it directly
+                $aiTextContent = $aiResponse.Trim()
+                $contentForJson = $aiTextContent
+            }
+            elseif ($aiResponse -is [System.Collections.IEnumerable]) {
+                # If it is an array (for example @(@{type=...;text=...}))
+                $aiTextContent = ($aiResponse | Where-Object {$_ -is [hashtable] -and $_.ContainsKey("text")} | Select-Object -ExpandProperty "text") -join ""
+                # Here we still need to pass the complete format to Python
+                $contentForJson = $aiResponse
+            }
+            else {
+                Write-Host "⚠️ Unable to recognize the format of the AI ​​response!" -ForegroundColor Red
+                continue
+            }
 
-            # Show response
-            Write-Host "AI: $aiResponse" -ForegroundColor Yellow
-
-            # Add ChatGPT response to list of messages
-            $MessageHistory.Add(@{
+            # Create a Hashtable to send to Python
+            $aiMessageHashtable = @{
                 "role" = "assistant"
-                "content" = @(@{"type" = "text"; "text" = $aiResponse})
-            })
+                "content" = $contentForJson
+            }
+            
+            # Write to temporary file
+            $tempAiResponseFile = [System.IO.Path]::GetTempFileName()
+            $aiMessageHashtable | ConvertTo-Json -Depth 5 | Set-Content -Path $tempAiResponseFile -Encoding utf8
+            
+            # Debug
+            #Write-Host "JSON content passed to Python:"
+            #Get-Content $tempAiResponseFile | Write-Host -ForegroundColor Magenta
+
+            # Call Python to calculate token
+            try {
+                $aiResponseTokenCount = & python "$PSScriptRoot\ChatGPT-tiktoken.py" $tempAiResponseFile 2>&1 | Out-String
+                $aiResponseTokenCount = [int]($aiResponseTokenCount.Trim())
+                # Show AI Response
+                Write-Host "AI: $aiResponse" -ForegroundColor Yellow
+                Write-Host "This response used [$aiResponseTokenCount tokens]" -ForegroundColor DarkGray
+            }
+            catch {
+                Write-Host "⚠️ An error occurred while calculating the AI ​​response token:" -ForegroundColor Red
+                Write-Host $_.Exception.Message -ForegroundColor Red
+                # Here you can choose to print out the Python return content to confirm the reason for failure
+                Write-Host "Python returns the following content:$aiResponseTokenCount" -ForegroundColor Red
+            }
+            finally {
+                # Clear temporary files
+                Remove-Item -Path $tempAiResponseFile -Force
+            }
+            
+            # Add AI responses to MessageHistory
+            $MessageHistory.Add($aiMessageHashtable)
         }
     }
 }

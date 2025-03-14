@@ -20,8 +20,8 @@ $model = "gpt-4o"
 $temperature = 0.7 # Lower is more coherent and conservative, higher is more creative and diverse.
 
 # 定義可選的模型,https://platform.openai.com/docs/models
-# Token Limit: Max amount of tokens the AI will respond with
-$models = @{
+# respondTokenLimit: Max amount of tokens the AI will respond with
+$models = [ordered]@{
     "1" = @{Model = "gpt-4o"; respondTokenLimit = 8000; contextTokenLimit = 128000; modelType = "chat"}
     "2" = @{Model = "gpt-4.5-preview-2025-02-27"; respondTokenLimit = 5000; contextTokenLimit = 128000 ;modelType = "chat"}
     "3" = @{Model = "o3-mini"; respondTokenLimit = 50000; contextTokenLimit = 200000; modelType = "reasoning"}
@@ -64,13 +64,13 @@ Function Invoke-ChatGPT ($MessageHistory) {
         $requestBody = @{
             "model" = $model
             "messages" = $MessageHistory
-            "max_completion_tokens" = $currentModelSetting.Value.tokenLimit
+            "max_completion_tokens" = $currentModelSetting.Value.respondTokenLimit
         }
     } else {
         $requestBody = @{
             "model" = $model
             "messages" = $MessageHistory
-            "max_tokens" = $currentModelSetting.Value.tokenLimit
+            "max_tokens" = $currentModelSetting.Value.respondTokenLimit
             "temperature" = $temperature
         }
     }
@@ -92,28 +92,10 @@ Function Invoke-ChatGPT ($MessageHistory) {
 # Display current Image settings
 Function Show-CurrentImageSettings {
     Write-Host "當前設定：model: 【$currentModel】 size: 【$currentSize】 quality: 【$currentQuality】" -ForegroundColor Cyan
-
 }
 
-# CreatImageSetting
-Function CreatImageSetting ($message){
-    $body = @{
-        model = "dall-e-3"
-        prompt = $message
-        n = 1
-        size = "1024x1024"
-    } | ConvertTo-Json
-
-    $response = curl https://api.openai.com/v1/images/generations `
-        -H "Content-Type: application/json" `
-        -H "Authorization: Bearer $ApiKey" `
-        -d $body
-
-    return $response
-}
-
-# CreatImageFunction
-Function ProcessImageCreation($versionChoice) {
+# Process-ImageCreation
+Function Process-ImageCreation($versionChoice) {
     do {
         Write-Host "請輸入創建圖片的提示詞（輸入 'exit' 離開創建圖片功能）"
         $inputLine = Read-Host
@@ -125,14 +107,14 @@ Function ProcessImageCreation($versionChoice) {
         # 根據版本選擇來決定是否最佳化提示詞
         if ($versionChoice -eq "1") {
             # 發送提示詞給 ChatGPT 進行最佳化
-            $MessageHistory.Add(@{"role"="user"; "content"="將以下提示詞最佳化為更明確的表達的內容、強烈的風格和精緻且豐富 的細節的 prompt，具有大師級作品的細緻，回覆內容要直接交付給 Dell-e-3，只需要回覆 prompt 即可：$inputLine"})
+            $MessageHistory.Add(@{"role"="user"; "content"="將以下提示詞最佳化為更明確的表達的內容、強烈的風格和精緻且豐富的細節的 prompt，具有大師級作品的細緻，回覆內容要直接交付給 Dell-e-3，只需要回覆 prompt 即可：$inputLine"})
             Write-Host "`n最佳化中..."
             $optimizedPrompt = Invoke-ChatGPT $MessageHistory
 
             Write-Host "`n最佳化後的提示詞: $optimizedPrompt"
-            $aiResponse = CreatImageSetting $optimizedPrompt
+            $aiResponse = Invoke-Dalle $optimizedPrompt
         } else {
-            $aiResponse = CreatImageSetting $inputLine
+            $aiResponse = Invoke-Dalle $inputLine
         }
 
         # 解析 JSON 回應
@@ -151,19 +133,54 @@ Function ProcessImageCreation($versionChoice) {
     } while ($true) # 持續重複直到輸入 exit
 }
 
+# Invoke-Dalle
+Function Invoke-Dalle($message){
+    $body = @{
+        model = $currentModel
+        prompt = $message
+        n = 1
+        size = $currentSize
+        quality= $currentQuality
+    } | ConvertTo-Json
+    try {
+        $response = curl https://api.openai.com/v1/images/generations `
+            -H "Content-Type: application/json" `
+            -H "Authorization: Bearer $ApiKey" `
+            -d $body
+        return $response
+    }
+    catch {
+        Write-Host "⚠️ 圖片生成 API 呼叫失敗：" -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor Red
+    }
+}
+
 # Save MessageHistory to gpt_history.log in plain text format
 Function Save-MessageHistory {
     $filePath = Join-Path -Path $PSScriptRoot -ChildPath "gpt_history.log"
-    $jsonContent = $MessageHistory | ConvertTo-Json -Depth 5
+    try {
+        $jsonContent = $MessageHistory | ConvertTo-Json -Depth 5
+    }
+    catch {
+        Write-Host "⚠️ 儲存對話歷史檔案發生錯誤：" -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor Red
+    }
     Set-Content -Path $filePath -Value $jsonContent -Encoding UTF8
     Write-Host "對話歷史已保存到 $filePath" -ForegroundColor Green
 }
+
 # Load MessageHistory from gpt_history.log in plain text format
 Function Load-MessageHistory {
     $filePath = Join-Path -Path $PSScriptRoot -ChildPath "gpt_history.log"
     if (Test-Path $filePath) {
         # 讀取 JSON 格式的內容並解析
-        $jsonContent = Get-Content -Path $filePath -Raw
+        try {
+            $jsonContent = Get-Content -Path $filePath -Raw
+        }
+        catch {
+            Write-Host "⚠️ 讀取對話歷史檔案發生錯誤：" -ForegroundColor Red
+            Write-Host $_.Exception.Message -ForegroundColor Red
+        }
         $jsonArray = $jsonContent | ConvertFrom-Json
 
         # 轉換為 List[Hashtable]
@@ -189,8 +206,15 @@ Function Encode-ImageToBase64 ($imagePath) {
         Write-Host "找不到該路徑的圖片，請確認路徑是否正確。" -ForegroundColor Red
         return $null
     }
-    [Byte[]]$imageBytes = [System.IO.File]::ReadAllBytes($imagePath)
-    return [Convert]::ToBase64String($imageBytes)
+    try {
+        [Byte[]]$imageBytes = [System.IO.File]::ReadAllBytes($imagePath)
+        return [Convert]::ToBase64String($imageBytes)
+    }
+    catch {
+        Write-Host "⚠️ 圖片讀取失敗，請確認路徑或檔案是否正確：" -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor Red
+        return $null
+    }
 }
 
 # Function to upload an image
@@ -235,18 +259,37 @@ Function Calculate-MessageTokens {
     $pythonScriptPath = Join-Path -Path $PSScriptRoot -ChildPath "ChatGPT-tiktoken.py"
 
     # 呼叫 Python 腳本，並將臨時檔案的路徑作為參數傳遞
-    $tokenCount = & python $pythonScriptPath $tempFilePath 2>&1 | Out-String
-    $tokenCount = $tokenCount.Trim() # 去除多餘的空白字符
+    try {
+        $tokenCount = & python $pythonScriptPath $tempFilePath 2>&1 | Out-String
+        $tokenCount = $tokenCount.Trim()
+    }
+    catch {
+        Write-Host "⚠️ Token 計算 (Python腳本) 呼叫失敗：" -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor Red
+        $tokenCount = 0
+    }
 
     # 清除臨時檔案
     Remove-Item -Path $tempFilePath
 
     return $tokenCount
 }
+
+# 錯誤處理函式
+Function Handle-Error ($errorMessage) {
+    Write-Host "⚠️ 發生錯誤了 $errorMessage" -ForegroundColor Red
+}
+
 # Show startup text
 Clear-Host
 Write-Host "###############################`n# ChatGPT ($model) Powershell #`n###############################`n`nEnter your prompt to continue." -ForegroundColor Yellow
 Write-Host "`nType 'eof' to switch to paragraph input mode,`nType 'read' to Read a plain text file,`nType 'image' to use DALL-E to creat an image,`nType 'upload' to upload an image for Vision,`nType 'save' to save the chat history or 'load' to load the chat history.`nType 'usage' to check incurred fees.`nType 'setting' to set model and temperature.`nType 'exit' to quit or 'reset' to start a new chat." -ForegroundColor Yellow
+
+# Check apikey
+if (-not $ApiKey) {
+    Write-Host "沒有設定 API Key，請設定 OPENAI_API_KEY 環境變數" -ForegroundColor Red
+    exit
+}
 
 # Add system message to MessageHistory
 Initialize-MessageHistory $AiSystemMessage
@@ -278,14 +321,14 @@ while ($true) {
             # 顯示可選模型
             Write-Host "請選擇一個模型："
             $models.GetEnumerator() | ForEach-Object {
-                Write-Host "$($_.Key). $($_.Value.Model)：	Respond Token Limit: $($_.Value.tokenLimit)	Type: $($_.Value.modelType)"
+                Write-Host "$($_.Key). $($_.Value.Model)：	Respond Token Limit: $($_.Value.respondTokenLimit)	Type: $($_.Value.modelType)"
             }
             $modelChoice = Read-Host "`n你的選擇"
 
-            if ($models.ContainsKey($modelChoice)) {
+            if ($models.Keys -contains $modelChoice) {
                 $model = $models[$modelChoice].Model
-                $tokenLimit = $models[$modelChoice].tokenLimit
-                Write-Host "已切換至模型：$model (Respond Token Limit: $tokenLimit)" -ForegroundColor Green
+                $respondTokenLimit = $models[$modelChoice].respondTokenLimit
+                Write-Host "已切換至模型：$model (Respond Token Limit: $respondTokenLimit)" -ForegroundColor Green
             } else {
                 Write-Host "未知的選項，將維持原設定。" -ForegroundColor Yellow
             }
@@ -295,13 +338,13 @@ while ($true) {
             $temperatureChoice = Read-Host "`n你的選擇"
 
             # 模式設定字典
-            $temperatureSettings = @{
+            $temperatureSettings = [ordered]@{
                 "1" = @{Temperature = 0.2; Message = "已設定為穩重模式。"}
                 "2" = @{Temperature = 0.7; Message = "已設定為預設模式。"}
                 "3" = @{Temperature = 1.0; Message = "已設定為創意模式。"}
             }
 
-            if ($temperatureSettings.ContainsKey($temperatureChoice)) {
+            if ($temperatureSettings.Keys -contains ($temperatureChoice)) {
                 $temperature = $temperatureSettings[$temperatureChoice].Temperature
                 Write-Host $temperatureSettings[$temperatureChoice].Message -ForegroundColor Green
             } else {
@@ -396,7 +439,7 @@ while ($true) {
                 # Change size
                 Write-Host "請選擇尺寸：`n1. 256x256 (DALL·E 2 Only)`n2. 512x512 (DALL·E 2 Only)`n3. 1024x1024`n4. 1024x1792 (DALL·E 3 Only)`n5. 1792x1024 (DALL·E 3 Only)"
                 $sizeChoice = Read-Host "`n你的選擇"
-                $sizeOptions = @{
+                $sizeOptions = [ordered]@{
                     "1" = "256x256"
                     "2" = "512x512"
                     "3" = "1024x1024"
@@ -404,7 +447,7 @@ while ($true) {
                     "5" = "1792x1024"
                 }
                 # 判斷選擇
-                if ($sizeOptions.ContainsKey($sizeChoice)) {
+                if ($sizeOptions.Keys -contains ($sizeChoice)) {
                     $currentSize = $sizeOptions[$sizeChoice]
                     Write-Host "已設定尺寸為：$currentSize" -ForegroundColor Green
                 } else {
@@ -434,7 +477,7 @@ while ($true) {
             }
             # 使用創建圖片函數並帶入使用的選擇模式參數
             if ($versionChoice -eq "1" -or $versionChoice -eq "2") {
-                ProcessImageCreation $versionChoice
+                Process-ImageCreation $versionChoice
             } else {
                 Write-Host "未知的選擇，請重新輸入。" -ForegroundColor Yellow
             }
@@ -448,25 +491,84 @@ while ($true) {
             })
 
             # Query ChatGPT
-            $tokenCount = [int](Calculate-MessageTokens -MessageHistory $MessageHistory)
-            Write-Host "...處理中 ( $model 已使用 token : $tokenCount)...`n" -ForegroundColor DarkGray
+            try {
+                $tokenCount = [int](Calculate-MessageTokens -MessageHistory $MessageHistory)
+            }
+            catch {
+                Write-Host "⚠️ 計算 Token 時發生錯誤：" -ForegroundColor Red
+                Write-Host $_.Exception.Message -ForegroundColor Red
+                $tokenCount = 0  # 給個預設值，避免後續錯誤
+            }
+            
+            Write-Host "...處理中 ( $model 這次送出使用了【$tokenCount 個 tokens】)...`n" -ForegroundColor DarkGray
             # 檢查是否接近 Token 上限
             $currentModelSetting = $models.GetEnumerator() | Where-Object { $_.Value.Model -eq $model } | Select-Object -First 1
-            if ($tokenCount -ge ($currentModelSetting.Value.contextTokenLimit - 2000)) {
+            if ($tokenCount -ge ($currentModelSetting.Value.contextTokenLimit * 0.9)) {
                 $remainingTokens = $currentModelSetting.Value.contextTokenLimit - $tokenCount
                 Write-Host "警告：距離 context token 上限 $contextTokenLimit 還剩下 $remainingTokens 個" -ForegroundColor Red
             }
 
-            $aiResponse = Invoke-ChatGPT $MessageHistory
+            try {
+                $aiResponse = Invoke-ChatGPT $MessageHistory
+            }
+            catch {
+                Write-Host "⚠️ 呼叫 ChatGPT 時發生錯誤：" -ForegroundColor Red
+                Write-Host $_.Exception.Message -ForegroundColor Red
+                continue
+            }
+            
+            # 這裡做明確的格式判斷處理
+            if ($aiResponse -is [string]) {
+                # 如果直接是一個字串，直接使用
+                $aiTextContent = $aiResponse.Trim()
+                $contentForJson = $aiTextContent
+            }
+            elseif ($aiResponse -is [System.Collections.IEnumerable]) {
+                # 如果是陣列 (例如 @(@{type=...;text=...}))
+                $aiTextContent = ($aiResponse | Where-Object {$_ -is [hashtable] -and $_.ContainsKey("text")} | Select-Object -ExpandProperty "text") -join ""
+                # 這裡我們仍要傳完整格式給 Python
+                $contentForJson = $aiResponse
+            }
+            else {
+                Write-Host "⚠️ 無法識別 AI 回應的格式！" -ForegroundColor Red
+                continue
+            }
 
-            # Show response
-            Write-Host "AI: $aiResponse" -ForegroundColor Yellow
-
-            # Add ChatGPT response to list of messages
-            $MessageHistory.Add(@{
+            # 建立要送給 Python 的 Hashtable
+            $aiMessageHashtable = @{
                 "role" = "assistant"
-                "content" = @(@{"type" = "text"; "text" = $aiResponse})
-            })
+                "content" = $contentForJson
+            }
+            
+            # 寫入暫存檔案
+            $tempAiResponseFile = [System.IO.Path]::GetTempFileName()
+            $aiMessageHashtable | ConvertTo-Json -Depth 5 | Set-Content -Path $tempAiResponseFile -Encoding utf8
+            
+            # Debug
+            #Write-Host "傳給 Python 的 JSON 內容："
+            #Get-Content $tempAiResponseFile | Write-Host -ForegroundColor Magenta
+
+            # 呼叫 Python 計算 token
+            try {
+                $aiResponseTokenCount = & python "$PSScriptRoot\ChatGPT-tiktoken.py" $tempAiResponseFile 2>&1 | Out-String
+                $aiResponseTokenCount = [int]($aiResponseTokenCount.Trim())
+                # 顯示 AI 回應
+                Write-Host "AI: $aiResponse" -ForegroundColor Yellow
+                Write-Host "這次回應使用了【$aiResponseTokenCount 個 tokens】" -ForegroundColor DarkGray
+            }
+            catch {
+                Write-Host "⚠️ 計算 AI 回應 token 時發生錯誤：" -ForegroundColor Red
+                Write-Host $_.Exception.Message -ForegroundColor Red
+                # 這裡可選擇印出Python回傳內容，確認失敗原因
+                Write-Host "Python 回傳內容：$aiResponseTokenCount" -ForegroundColor Red
+            }
+            finally {
+                # 清除暫存檔案
+                Remove-Item -Path $tempAiResponseFile -Force
+            }
+            
+            # 將 AI 回應加入 MessageHistory
+            $MessageHistory.Add($aiMessageHashtable)
         }
     }
 }
